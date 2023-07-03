@@ -120,6 +120,14 @@ class KeysightN9344C(Instrument):
         validator=strict_discrete_set,
         values=VID_LIMIT
     )
+    exteral_input = Instrument.control(
+        ":SYST:PORT:EXTI?", ":SYST:PORT:EXTI %s",
+        """ A string property that represents the external input. 
+        This property can be set.""",
+        validator=strict_discrete_set,
+        values=['REF', 'TRIG']
+    )
+    
 
     def __init__(self, adapter, **kwargs):
         super(KeysightN9344C, self).__init__(
