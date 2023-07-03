@@ -1,7 +1,7 @@
 #
 # This file is part of the PyMeasure package.
 #
-# Copyright (c) 2013-2021 PyMeasure Developers
+# Copyright (c) 2013-2023 PyMeasure Developers
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -26,27 +26,30 @@ import logging
 
 from os.path import basename
 
-from .Qt import QtCore, QtGui
+from .Qt import QtCore, QtGui, QtWidgets
+
 from ..experiment import Procedure
 
 log = logging.getLogger(__name__)
 log.addHandler(logging.NullHandler())
 
 
-class BrowserItem(QtGui.QTreeWidgetItem):
-    def __init__(self, results, curve, parent=None):
+class BrowserItem(QtWidgets.QTreeWidgetItem):
+    """ Represent a row in the :class:`~pymeasure.display.browser.Browser` tree widget """
+
+    def __init__(self, results, color, parent=None):
         super().__init__(parent)
 
         pixelmap = QtGui.QPixmap(24, 24)
-        pixelmap.fill(curve.opts['pen'].color())
+        pixelmap.fill(color)
         self.setIcon(0, QtGui.QIcon(pixelmap))
-        self.setFlags(self.flags() | QtCore.Qt.ItemIsUserCheckable)
-        self.setCheckState(0, QtCore.Qt.Checked)
+        self.setFlags(self.flags() | QtCore.Qt.ItemFlag.ItemIsUserCheckable)
+        self.setCheckState(0, QtCore.Qt.CheckState.Checked)
         self.setText(1, basename(results.data_filename))
 
         self.setStatus(results.procedure.status)
 
-        self.progressbar = QtGui.QProgressBar()
+        self.progressbar = QtWidgets.QProgressBar()
         self.progressbar.setRange(0, 100)
         self.progressbar.setValue(0)
 
@@ -72,9 +75,10 @@ class BrowserItem(QtGui.QTreeWidgetItem):
             """)
 
     def setProgress(self, progress):
-        self.progressbar.setValue(progress)
+        self.progressbar.setValue(int(progress))
 
-class Browser(QtGui.QTreeWidget):
+
+class Browser(QtWidgets.QTreeWidget):
     """Graphical list view of :class:`Experiment<pymeasure.display.manager.Experiment>`
     objects allowing the user to view the status of queued Experiments as well as
     loading and displaying data from previous runs.
@@ -89,7 +93,7 @@ class Browser(QtGui.QTreeWidget):
         super().__init__(parent)
         self.display_parameters = display_parameters
         self.procedure_class = procedure_class
-        self.measured_quantities = measured_quantities
+        self.measured_quantities = set(measured_quantities)
 
         header_labels = ["Graph", "Filename", "Progress", "Status"]
         for parameter in self.display_parameters:
@@ -99,7 +103,7 @@ class Browser(QtGui.QTreeWidget):
         self.setHeaderLabels(header_labels)
         self.setSortingEnabled(True)
         if sort_by_filename:
-            self.sortItems(1, QtCore.Qt.AscendingOrder)
+            self.sortItems(1, QtCore.Qt.SortOrder.AscendingOrder)
 
         for i, width in enumerate([80, 140]):
             self.header().resizeSection(i, width)

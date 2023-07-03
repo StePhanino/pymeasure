@@ -1,7 +1,7 @@
 #
 # This file is part of the PyMeasure package.
 #
-# Copyright (c) 2013-2021 PyMeasure Developers
+# Copyright (c) 2013-2023 PyMeasure Developers
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -22,44 +22,98 @@
 # THE SOFTWARE.
 #
 
+from decimal import Decimal
 import logging
-
 import os
 import re
 import sys
-from copy import deepcopy
+from importlib import import_module
 from importlib.machinery import SourceFileLoader
 from datetime import datetime
+from string import Formatter
 
 import pandas as pd
+import pint
 
 from .procedure import Procedure, UnknownProcedure
-from .parameters import Parameter
+from pymeasure.units import ureg
 
 log = logging.getLogger(__name__)
 log.addHandler(logging.NullHandler())
 
 
+def replace_placeholders(string, procedure, date_format="%Y-%m-%d", time_format="%H:%M:%S"):
+    """Replace placeholders in string with values from procedure parameters.
+
+    Replaces the placeholders in the provided string with the values of the
+    associated parameters, as provided by the procedure. This uses the standard
+    python string.format syntax. Apart from the parameter in the procedure (which
+    should be called by their full names) "date" and "time" are also added as optional
+    placeholders.
+
+    :param string:
+        The string in which the placeholders are to be replaced. Python string.format
+        syntax is used, e.g. "{Parameter Name}" to insert a FloatParameter called
+        "Parameter Name", or "{Parameter Name:.2f}" to also specifically format the
+        parameter.
+
+    :param procedure:
+        The procedure from which to get the parameter values.
+
+    :param date_format:
+        A string to represent how the additional placeholder "date" will be formatted.
+
+    :param time_format:
+        A string to represent how the additional placeholder "time" will be formatted.
+
+    """
+    now = datetime.now()
+
+    parameters = procedure.parameter_objects()
+    placeholders = {param.name: param.value for param in parameters.values()}
+
+    placeholders["date"] = now.strftime(date_format)
+    placeholders["time"] = now.strftime(time_format)
+
+    # Check keys against available parameters
+    invalid_keys = [i[1] for i in Formatter().parse(string)
+                    if i[1] is not None and i[1] not in placeholders]
+    if invalid_keys:
+        raise KeyError("The following placeholder-keys are not valid: '%s'; "
+                       "valid keys are: '%s'." % (
+                           "', '".join(invalid_keys),
+                           "', '".join(placeholders.keys())
+                       ))
+
+    return string.format(**placeholders)
+
+
 def unique_filename(directory, prefix='DATA', suffix='', ext='csv',
-                    dated_folder=False, index=True, datetimeformat="%Y-%m-%d"):
+                    dated_folder=False, index=True, datetimeformat="%Y-%m-%d",
+                    procedure=None):
     """ Returns a unique filename based on the directory and prefix
     """
     now = datetime.now()
     directory = os.path.abspath(directory)
+
+    if procedure is not None:
+        prefix = replace_placeholders(prefix, procedure)
+        suffix = replace_placeholders(suffix, procedure)
+
     if dated_folder:
         directory = os.path.join(directory, now.strftime('%Y-%m-%d'))
     if not os.path.exists(directory):
         os.makedirs(directory)
     if index:
         i = 1
-        basename = "%s%s" % (prefix, now.strftime(datetimeformat))
+        basename = f"{prefix}{now.strftime(datetimeformat)}"
         basepath = os.path.join(directory, basename)
         filename = "%s_%d%s.%s" % (basepath, i, suffix, ext)
         while os.path.exists(filename):
             i += 1
             filename = "%s_%d%s.%s" % (basepath, i, suffix, ext)
     else:
-        basename = "%s%s%s.%s" % (prefix, now.strftime(datetimeformat), suffix, ext)
+        basename = f"{prefix}{now.strftime(datetimeformat)}{suffix}.{ext}"
         filename = os.path.join(directory, basename)
     return filename
 
@@ -77,6 +131,7 @@ class CSVFormatter(logging.Formatter):
         """
         super().__init__()
         self.columns = columns
+        self.units = Procedure.parse_columns(columns)
         self.delimiter = delimiter
 
     def format(self, record):
@@ -86,13 +141,55 @@ class CSVFormatter(logging.Formatter):
         :type record: dict
         :return: a string
         """
-        return self.delimiter.join('{}'.format(record[x]) for x in self.columns)
+        line = []
+        for x in self.columns:
+            value = record.get(x, float("nan"))
+            if isinstance(value, (float, int, Decimal)) and type(value) is not bool:
+                line.append(f"{value}")
+            else:
+                units = self.units.get(x, None)
+                if units is not None:
+                    if isinstance(value, str):
+                        try:
+                            value = ureg.Quantity(value)
+                        except pint.UndefinedUnitError:
+                            log.warning(
+                                f"Value {value} for column {x} cannot be parsed to"
+                                f" unit {units}.")
+                    if isinstance(value, pint.Quantity):
+                        try:
+                            line.append(f"{value.m_as(units)}")
+                        except pint.DimensionalityError:
+                            line.append("nan")
+                            log.warning(
+                                f"Value {value} for column {x} does not have the "
+                                f"right unit {units}.")
+                    elif isinstance(value, bool):
+                        line.append("nan")
+                        log.warning(
+                            f"Boolean for column {x} does not have unit {units}.")
+                    else:
+                        line.append("nan")
+                        log.warning(
+                            f"Value {value} for column {x} does not have the right"
+                            f" type for unit {units}.")
+                else:
+                    if isinstance(value, pint.Quantity):
+                        if value.units == ureg.dimensionless:
+                            line.append(f"{value.magnitude}")
+                        else:
+                            self.units[x] = value.to_base_units().units
+                            line.append(f"{value.m_as(self.units[x])}")
+                            log.info(f"Column {x} units was set to {self.units[x]}")
+                    else:
+                        line.append(f"{value}")
+        return self.delimiter.join(line)
 
     def format_header(self):
         return self.delimiter.join(self.columns)
 
 
-class Results(object):
+class Results:
     """ The Results class provides a convenient interface to reading and
     writing data in connection with a :class:`.Procedure` object.
 
@@ -118,6 +215,7 @@ class Results(object):
         self.procedure_class = procedure.__class__
         self.parameters = procedure.parameter_objects()
         self._header_count = -1
+        self._metadata_count = -1
 
         self.formatter = CSVFormatter(columns=self.procedure.DATA_COLUMNS)
 
@@ -183,10 +281,11 @@ class Results(object):
         h.append("Procedure: <%s>" % procedure)
         h.append("Parameters:")
         for name, parameter in self.parameters.items():
-            h.append("\t%s: %s" % (parameter.name, str(parameter).encode("unicode_escape").decode("utf-8")))
+            h.append("\t{}: {}".format(parameter.name, str(
+                parameter).encode("unicode_escape").decode("utf-8")))
         h.append("Data:")
         self._header_count = len(h)
-        h = [Results.COMMENT + l for l in h]  # Comment each line
+        h = [Results.COMMENT + line for line in h]  # Comment each line
         return Results.LINE_BREAK.join(h) + Results.LINE_BREAK
 
     def labels(self):
@@ -208,6 +307,36 @@ class Results(object):
         for i, key in enumerate(self.procedure.DATA_COLUMNS):
             data[key] = items[i]
         return data
+
+    def metadata(self):
+        """ Returns a text header for the metadata to write into the datafile """
+        if not self.procedure.metadata_objects():
+            return
+
+        m = ["Metadata:"]
+        for _, metadata in self.procedure.metadata_objects().items():
+            value = str(metadata).encode("unicode_escape").decode("utf-8")
+            m.append(f"\t{metadata.name}: {value}")
+
+        self._metadata_count = len(m)
+        m = [Results.COMMENT + line for line in m]  # Comment each line
+        return Results.LINE_BREAK.join(m) + Results.LINE_BREAK
+
+    def store_metadata(self):
+        """ Inserts the metadata header (if any) into the datafile """
+        c_header = self.metadata()
+        if c_header is None:
+            return
+
+        for filename in self.data_filenames:
+            with open(filename, 'r+') as f:
+                contents = f.readlines()
+                contents.insert(self._header_count - 1, c_header)
+
+                f.seek(0)
+                f.writelines(contents)
+
+        self._header_count += self._metadata_count
 
     @staticmethod
     def parse_header(header, procedure_class=None):
@@ -245,15 +374,12 @@ class Results(object):
             if procedure_class is None:
                 raise ValueError("Header does not contain the Procedure class")
             try:
-                from importlib import import_module
                 procedure_module = import_module(procedure_module)
                 procedure_class = getattr(procedure_module, procedure_class)
                 procedure = procedure_class()
             except ImportError:
                 procedure = UnknownProcedure(parameters)
                 log.warning("Unknown Procedure being used")
-            except Exception as e:
-                raise e
 
         # Fill the procedure with the parameters found
         for name, parameter in procedure.parameter_objects().items():
@@ -261,10 +387,23 @@ class Results(object):
                 value = parameters[parameter.name]
                 setattr(procedure, name, value)
             else:
-                raise Exception("Missing '%s' parameter when loading '%s' class" % (
-                    parameter.name, procedure_class))
+                log.warning(
+                    f"Parameter \"{parameter.name}\" not found when loading " +
+                    f"'{procedure_class}', setting default value")
+                setattr(procedure, name, parameter.default)
 
         procedure.refresh_parameters()  # Enforce update of meta data
+
+        # Fill the procedure with the metadata found
+        for name, metadata in procedure.metadata_objects().items():
+            if metadata.name in parameters:
+                value = parameters[metadata.name]
+                setattr(procedure, name, value)
+
+                # Set the value in the metadata
+                metadata._value = value
+                metadata.evaluated = True
+
         return procedure
 
     @staticmethod
@@ -275,7 +414,7 @@ class Results(object):
         header = ""
         header_read = False
         header_count = 0
-        with open(data_filename, 'r') as f:
+        with open(data_filename) as f:
             while not header_read:
                 line = f.readline()
                 if line.startswith(Results.COMMENT):

@@ -1,7 +1,7 @@
 #
 # This file is part of the PyMeasure package.
 #
-# Copyright (c) 2013-2021 PyMeasure Developers
+# Copyright (c) 2013-2023 PyMeasure Developers
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -74,8 +74,9 @@ class AxisError(Exception):
         self.message = self.MESSAGES[self.error]
 
     def __str__(self):
-        return "Newport ESP300 axis %s reported the error: %s" % (
+        return "Newport ESP300 axis {} reported the error: {}".format(
             self.axis, self.message)
+
 
 class GeneralError(Exception):
     """ Raised when the Newport ESP300 has a general error.
@@ -125,7 +126,8 @@ class GeneralError(Exception):
         return "Newport ESP300 reported the error: %s" % (
             self.message)
 
-class Axis(object):
+
+class Axis:
     """ Represents an axis of the Newport ESP300 Motor Controller,
     which can have independent parameters from the other axes.
     """
@@ -164,10 +166,10 @@ class Axis(object):
         """,
         validator=strict_discrete_set,
         values={
-            'encoder count':0, 'motor step':1, 'millimeter':2,
-            'micrometer':3, 'inches':4, 'milli-inches':5,
-            'micro-inches':6, 'degree':7, 'gradient':8,
-            'radian':9, 'milliradian':10, 'microradian':11
+            'encoder count': 0, 'motor step': 1, 'millimeter': 2,
+            'micrometer': 3, 'inches': 4, 'milli-inches': 5,
+            'micro-inches': 6, 'degree': 7, 'gradient': 8,
+            'radian': 9, 'milliradian': 10, 'microradian': 11
         },
         map_values=True
     )
@@ -207,7 +209,7 @@ class Axis(object):
         hardware limit for some actuators (e.g. LTA-HS).
         type can take integer values from 0 to 6.
         """
-        home_type = strict_discrete_set(type, [0,1,2,3,4,5,6])
+        home_type = strict_discrete_set(type, [0, 1, 2, 3, 4, 5, 6])
         self.write("OR%d" % home_type)
 
     def define_position(self, position):
@@ -224,7 +226,7 @@ class Axis(object):
         """ Blocks the program until the motion is completed. A further
         delay can be specified in seconds.
         """
-        self.write("WS%d" % (delay*1e3))
+        self.write("WS%d" % (delay * 1e3))
         while not self.motion_done:
             sleep(interval)
 
@@ -242,15 +244,15 @@ class ESP300(Instrument):
 
     error = Instrument.measurement(
         "TE?",
-        """ Reads an error code from the motion controller.
+        """ Get an error code from the motion controller.
         """,
         cast=int
     )
 
-    def __init__(self, resourceName, **kwargs):
-        super(ESP300, self).__init__(
-            resourceName,
-            "Newport ESP 300 Motion Controller",
+    def __init__(self, adapter, name="Newport ESP 300 Motion Controller", **kwargs):
+        super().__init__(
+            adapter,
+            name,
             **kwargs
         )
         # Defines default axes, which can be overwritten
@@ -266,7 +268,7 @@ class ESP300(Instrument):
 
     @property
     def errors(self):
-        """ Returns a list of error Exceptions that can be later raised, or
+        """ Get a list of error Exceptions that can be later raised, or
         used to diagnose the situation.
         """
         errors = []
@@ -282,13 +284,13 @@ class ESP300(Instrument):
 
     @property
     def axes(self):
-        """ A list of the :class:`Axis <pymeasure.instruments.newport.esp300.Axis>`
+        """ Get a list of the :class:`Axis <pymeasure.instruments.newport.esp300.Axis>`
         objects that are present. """
         axes = []
         directory = dir(self)
         for name in directory:
             if name == 'axes':
-                continue # Skip this property
+                continue  # Skip this property
             try:
                 item = getattr(self, name)
                 if isinstance(item, Axis):
@@ -315,3 +317,4 @@ class ESP300(Instrument):
         """ Shuts down the controller by disabling all of the axes.
         """
         self.disable()
+        super().shutdown()

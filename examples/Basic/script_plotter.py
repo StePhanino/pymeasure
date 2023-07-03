@@ -1,5 +1,29 @@
+#
+# This file is part of the PyMeasure package.
+#
+# Copyright (c) 2013-2023 PyMeasure Developers
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+#
+
 """
-This example demonstrates how to make a command line interface with a 
+This example demonstrates how to make a command line interface with a
 live-plotting interface, and uses a random number generator to simulate
 data so that it does not require an instrument to use.
 
@@ -13,14 +37,14 @@ import random
 import tempfile
 from time import sleep
 
+from pymeasure.log import console_log
+from pymeasure.experiment import Procedure, IntegerParameter, Parameter, FloatParameter
+from pymeasure.experiment import Results, Worker
+from pymeasure.display import Plotter
+
 import logging
 log = logging.getLogger(__name__)
 log.addHandler(logging.NullHandler())
-
-from pymeasure.log import console_log
-from pymeasure.experiment import Procedure, IntegerParameter, Parameter, FloatParameter
-from pymeasure.experiment import Results, Worker, unique_filename
-from pymeasure.display import Plotter
 
 
 class TestProcedure(Procedure):
@@ -44,7 +68,7 @@ class TestProcedure(Procedure):
             }
             log.debug("Produced numbers: %s" % data)
             self.emit('results', data)
-            self.emit('progress', 100.*i/self.iterations)
+            self.emit('progress', 100. * i / self.iterations)
             sleep(self.delay)
             if self.should_stop():
                 log.warning("Catch stop command in procedure")
@@ -55,7 +79,7 @@ class TestProcedure(Procedure):
 
 
 if __name__ == "__main__":
-    
+
     scribe = console_log(log, level=logging.DEBUG)
     scribe.start()
 
@@ -79,7 +103,7 @@ if __name__ == "__main__":
     worker.start()
 
     log.info("Joining with the worker in at most 20 min")
-    worker.join(60*20)
+    worker.join(60 * 20)
     log.info("Waiting for Plotter to close")
     plotter.wait_for_close()
     log.info("Plotter closed")

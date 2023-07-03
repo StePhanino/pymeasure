@@ -1,7 +1,7 @@
 #
 # This file is part of the PyMeasure package.
 #
-# Copyright (c) 2013-2021 PyMeasure Developers
+# Copyright (c) 2013-2023 PyMeasure Developers
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -23,338 +23,223 @@
 #
 
 import logging
-import re
+import time
 
-import numpy as np
-
-from pymeasure.adapters import FakeAdapter
-from pymeasure.adapters.visa import VISAAdapter
+from .common_base import CommonBase
+from ..adapters import VISAAdapter
 
 log = logging.getLogger(__name__)
 log.addHandler(logging.NullHandler())
 
 
-class Instrument(object):
-    """ This provides the base class for all Instruments, which is
-    independent of the particular Adapter used to connect for
-    communication to the instrument. It provides basic SCPI commands
-    by default, but can be toggled with :code:`includeSCPI`.
+class Instrument(CommonBase):
+    """ The base class for all Instrument definitions.
 
-    :param adapter: An :class:`Adapter<pymeasure.adapters.Adapter>` object
-    :param name: A string name
+    It makes use of one of the :py:class:`~pymeasure.adapters.Adapter` classes for communication
+    with the connected hardware device. This decouples the instrument/command definition from the
+    specific communication interface used.
+
+    When ``adapter`` is a string, this is taken as an appropriate resource name. Depending on your
+    installed VISA library, this can be something simple like ``COM1`` or ``ASRL2``, or a more
+    complicated
+    `VISA resource name <https://pyvisa.readthedocs.io/en/latest/introduction/names.html>`__
+    defining the target of your connection.
+
+    When ``adapter`` is an integer, a GPIB resource name is created based on that.
+    In either case a :py:class:`~pymeasure.adapters.VISAAdapter` is constructed based on that
+    resource name.
+    Keyword arguments can be used to further configure the connection.
+
+    Otherwise, the passed :py:class:`~pymeasure.adapters.Adapter` object is used and any keyword
+    arguments are discarded.
+
+    This class defines basic SCPI commands by default. This can be disabled with
+    :code:`includeSCPI` for instruments not compatible with the standard SCPI commands.
+
+    :param adapter: A string, integer, or :py:class:`~pymeasure.adapters.Adapter` subclass object
+    :param string name: The name of the instrument. Often the model designation by default.
     :param includeSCPI: A boolean, which toggles the inclusion of standard SCPI commands
+    :param preprocess_reply: An optional callable used to preprocess
+        strings received from the instrument. The callable returns the
+        processed string.
+
+        .. deprecated:: 0.11
+            Implement it in the instrument's `read` method instead.
+    :param \\**kwargs: In case ``adapter`` is a string or integer, additional arguments passed on
+        to :py:class:`~pymeasure.adapters.VISAAdapter` (check there for details).
+        Discarded otherwise.
     """
 
     # noinspection PyPep8Naming
-    def __init__(self, adapter, name, includeSCPI=True, **kwargs):
-        try:
-            if isinstance(adapter, (int, str)):
+    def __init__(self, adapter, name, includeSCPI=True,
+                 preprocess_reply=None,
+                 **kwargs):
+        # Setup communication before possible children require the adapter.
+        if isinstance(adapter, (int, str)):
+            try:
                 adapter = VISAAdapter(adapter, **kwargs)
-        except ImportError:
-            raise Exception("Invalid Adapter provided for Instrument since "
-                            "PyVISA is not present")
-
-        self.name = name
-        self.SCPI = includeSCPI
+            except ImportError:
+                raise Exception("Invalid Adapter provided for Instrument since"
+                                " PyVISA is not present")
         self.adapter = adapter
-
-        class Object(object):
-            pass
-
-        self.get = Object()
-
-        # TODO: Determine case basis for the addition of these methods
-        if includeSCPI:
-            # Basic SCPI commands
-            self.status = self.measurement("*STB?",
-                                           """ Returns the status of the instrument """)
-            self.complete = self.measurement("*OPC?",
-                                             """ TODO: Add this doc """)
-
+        self.SCPI = includeSCPI
         self.isShutdown = False
+        self.name = name
+
+        super().__init__(preprocess_reply=preprocess_reply)
+
         log.info("Initializing %s." % self.name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.shutdown()
+
+    # SCPI default properties
+    @property
+    def complete(self):
+        """Get the synchronization bit.
+
+        This property allows synchronization between a controller and a device. The Operation
+        Complete query places an ASCII character 1 into the device's Output Queue when all pending
+        selected device operations have been finished.
+        """
+        if self.SCPI:
+            return self.ask("*OPC?").strip()
+        else:
+            raise NotImplementedError("Non SCPI instruments require implementation in subclasses")
+
+    @property
+    def status(self):
+        """ Get the status byte and Master Summary Status bit. """
+        if self.SCPI:
+            return self.ask("*STB?").strip()
+        else:
+            raise NotImplementedError("Non SCPI instruments require implementation in subclasses")
+
+    @property
+    def options(self):
+        """ Get the device options installed. """
+        if self.SCPI:
+            return self.ask("*OPT?").strip()
+        else:
+            raise NotImplementedError("Non SCPI instruments require implementation in subclasses")
 
     @property
     def id(self):
-        """ Requests and returns the identification of the instrument. """
+        """ Get the identification of the instrument. """
         if self.SCPI:
-            return self.adapter.ask("*IDN?").strip()
+            return self.ask("*IDN?").strip()
         else:
-            return "Warning: Property not implemented."
+            raise NotImplementedError("Non SCPI instruments require implementation in subclasses")
 
     # Wrapper functions for the Adapter object
-    def ask(self, command):
-        """ Writes the command to the instrument through the adapter
-        and returns the read response.
+    def write(self, command, **kwargs):
+        """Write a string command to the instrument appending `write_termination`.
 
         :param command: command string to be sent to the instrument
+        :param kwargs: Keyword arguments for the adapter.
         """
-        return self.adapter.ask(command)
+        self.adapter.write(command, **kwargs)
 
-    def write(self, command):
-        """ Writes the command to the instrument through the adapter.
+    def write_bytes(self, content, **kwargs):
+        """Write the bytes `content` to the instrument."""
+        self.adapter.write_bytes(content, **kwargs)
 
-        :param command: command string to be sent to the instrument
+    def read(self, **kwargs):
+        """Read up to (excluding) `read_termination` or the whole read buffer."""
+        return self.adapter.read(**kwargs)
+
+    def read_bytes(self, count, **kwargs):
+        """Read a certain number of bytes from the instrument.
+
+        :param int count: Number of bytes to read. A value of -1 indicates to
+            read the whole read buffer.
+        :param kwargs: Keyword arguments for the adapter.
+        :returns bytes: Bytes response of the instrument (including termination).
         """
-        self.adapter.write(command)
+        return self.adapter.read_bytes(count, **kwargs)
 
-    def read(self):
-        """ Reads from the instrument through the adapter and returns the
-        response.
+    def write_binary_values(self, command, values, *args, **kwargs):
+        """Write binary values to the device.
+
+        :param command: Command to send.
+        :param values: The values to transmit.
+        :param \\*args, \\**kwargs: Further arguments to hand to the Adapter.
         """
-        return self.adapter.read()
+        self.adapter.write_binary_values(command, values, *args, **kwargs)
 
-    def values(self, command, **kwargs):
-        """ Reads a set of values from the instrument through the adapter,
-        passing on any key-word arguments.
+    def read_binary_values(self, **kwargs):
+        """Read binary values from the device."""
+        return self.adapter.read_binary_values(**kwargs)
+
+    # Communication functions
+    def wait_for(self, query_delay=0):
+        """Wait for some time. Used by 'ask' to wait before reading.
+
+        :param query_delay: Delay between writing and reading in seconds.
         """
-        return self.adapter.values(command, **kwargs)
+        if query_delay:
+            time.sleep(query_delay)
 
-    def binary_values(self, command, header_bytes=0, dtype=np.float32):
-        return self.adapter.binary_values(command, header_bytes, dtype)
-
-    @staticmethod
-    def control(get_command, set_command, docs,
-                validator=lambda v, vs: v, values=(), map_values=False,
-                get_process=lambda v: v, set_process=lambda v: v,
-                check_set_errors=False, check_get_errors=False,
-                **kwargs):
-        """Returns a property for the class based on the supplied
-        commands. This property may be set and read from the
-        instrument.
-
-        :param get_command: A string command that asks for the value
-        :param set_command: A string command that writes the value
-        :param docs: A docstring that will be included in the documentation
-        :param validator: A function that takes both a value and a group of valid values
-                          and returns a valid value, while it otherwise raises an exception
-        :param values: A list, tuple, range, or dictionary of valid values, that can be used
-                       as to map values if :code:`map_values` is True.
-        :param map_values: A boolean flag that determines if the values should be
-                          interpreted as a map
-        :param get_process: A function that take a value and allows processing
-                            before value mapping, returning the processed value
-        :param set_process: A function that takes a value and allows processing
-                            before value mapping, returning the processed value
-        :param check_set_errors: Toggles checking errors after setting
-        :param check_get_errors: Toggles checking errors after getting
-        """
-
-        if map_values and isinstance(values, dict):
-            # Prepare the inverse values for performance
-            inverse = {v: k for k, v in values.items()}
-
-        def fget(self):
-            vals = self.values(get_command, **kwargs)
-            if check_get_errors:
-                self.check_errors()
-            if len(vals) == 1:
-                value = get_process(vals[0])
-                if not map_values:
-                    return value
-                elif isinstance(values, (list, tuple, range)):
-                    return values[int(value)]
-                elif isinstance(values, dict):
-                    return inverse[value]
-                else:
-                    raise ValueError(
-                        'Values of type `{}` are not allowed '
-                        'for Instrument.control'.format(type(values))
-                    )
-            else:
-                vals = get_process(vals)
-                return vals
-
-        def fset(self, value):
-            value = set_process(validator(value, values))
-            if not map_values:
-                pass
-            elif isinstance(values, (list, tuple, range)):
-                value = values.index(value)
-            elif isinstance(values, dict):
-                value = values[value]
-            else:
-                raise ValueError(
-                    'Values of type `{}` are not allowed '
-                    'for Instrument.control'.format(type(values))
-                )
-            self.write(set_command % value)
-            if check_set_errors:
-                self.check_errors()
-
-        # Add the specified document string to the getter
-        fget.__doc__ = docs
-
-        return property(fget, fset)
-
-    @staticmethod
-    def measurement(get_command, docs, values=(), map_values=None,
-                    get_process=lambda v: v, command_process=lambda c: c,
-                    check_get_errors=False, **kwargs):
-        """ Returns a property for the class based on the supplied
-        commands. This is a measurement quantity that may only be
-        read from the instrument, not set.
-
-        :param get_command: A string command that asks for the value
-        :param docs: A docstring that will be included in the documentation
-        :param values: A list, tuple, range, or dictionary of valid values, that can be used
-                       as to map values if :code:`map_values` is True.
-        :param map_values: A boolean flag that determines if the values should be
-                          interpreted as a map
-        :param get_process: A function that take a value and allows processing
-                            before value mapping, returning the processed value
-        :param command_process: A function that take a command and allows processing
-                            before executing the command, for both getting and setting
-        :param check_get_errors: Toggles checking errors after getting
-        """
-
-        if map_values and isinstance(values, dict):
-            # Prepare the inverse values for performance
-            inverse = {v: k for k, v in values.items()}
-
-        def fget(self):
-            vals = self.values(command_process(get_command), **kwargs)
-            if check_get_errors:
-                self.check_errors()
-            if len(vals) == 1:
-                value = get_process(vals[0])
-                if not map_values:
-                    return value
-                elif isinstance(values, (list, tuple, range)):
-                    return values[int(value)]
-                elif isinstance(values, dict):
-                    return inverse[value]
-                else:
-                    raise ValueError(
-                        'Values of type `{}` are not allowed '
-                        'for Instrument.measurement'.format(type(values))
-                    )
-            else:
-                return get_process(vals)
-
-        # Add the specified document string to the getter
-        fget.__doc__ = docs
-
-        return property(fget)
-
-    @staticmethod
-    def setting(set_command, docs,
-                validator=lambda x, y: x, values=(), map_values=False,
-                set_process=lambda v: v,
-                check_set_errors=False,
-                **kwargs):
-        """Returns a property for the class based on the supplied
-        commands. This property may be set, but raises an exception
-        when being read from the instrument.
-
-        :param set_command: A string command that writes the value
-        :param docs: A docstring that will be included in the documentation
-        :param validator: A function that takes both a value and a group of valid values
-                          and returns a valid value, while it otherwise raises an exception
-        :param values: A list, tuple, range, or dictionary of valid values, that can be used
-                       as to map values if :code:`map_values` is True.
-        :param map_values: A boolean flag that determines if the values should be
-                          interpreted as a map
-        :param set_process: A function that takes a value and allows processing
-                            before value mapping, returning the processed value
-        :param check_set_errors: Toggles checking errors after setting
-        """
-
-        if map_values and isinstance(values, dict):
-            # Prepare the inverse values for performance
-            inverse = {v: k for k, v in values.items()}
-
-        def fget(self):
-            raise LookupError("Instrument.setting properties can not be read.")
-
-        def fset(self, value):
-            value = set_process(validator(value, values))
-            if not map_values:
-                pass
-            elif isinstance(values, (list, tuple, range)):
-                value = values.index(value)
-            elif isinstance(values, dict):
-                value = values[value]
-            else:
-                raise ValueError(
-                    'Values of type `{}` are not allowed '
-                    'for Instrument.control'.format(type(values))
-                )
-            self.write(set_command % value)
-            if check_set_errors:
-                self.check_errors()
-
-        # Add the specified document string to the getter
-        fget.__doc__ = docs
-
-        return property(fget, fset)
-
-    # TODO: Determine case basis for the addition of this method
+    # SCPI default methods
     def clear(self):
         """ Clears the instrument status byte
         """
-        self.write("*CLS")
+        if self.SCPI:
+            self.write("*CLS")
+        else:
+            raise NotImplementedError("Non SCPI instruments require implementation in subclasses")
 
-    # TODO: Determine case basis for the addition of this method
     def reset(self):
         """ Resets the instrument. """
-        self.write("*RST")
+        if self.SCPI:
+            self.write("*RST")
+        else:
+            raise NotImplementedError("Non SCPI instruments require implementation in subclasses")
 
     def shutdown(self):
         """Brings the instrument to a safe and stable state"""
         self.isShutdown = True
-        log.info("Shutting down %s" % self.name)
+        log.info(f"Finished shutting down {self.name}")
 
     def check_errors(self):
-        """Return any accumulated errors. Must be reimplemented by subclasses.
+        """Read all errors from the instrument and log them.
+
+        :return: List of error entries.
         """
-        pass
-
-
-class FakeInstrument(Instrument):
-    """ Provides a fake implementation of the Instrument class
-    for testing purposes.
-    """
-
-    def __init__(self, adapter=None, name=None, includeSCPI=False, **kwargs):
-        super().__init__(
-            FakeAdapter(**kwargs),
-            name or "Fake Instrument",
-            includeSCPI=includeSCPI,
-            **kwargs
-        )
-
-    @staticmethod
-    def control(get_command, set_command, docs,
-                validator=lambda v, vs: v, values=(), map_values=False,
-                get_process=lambda v: v, set_process=lambda v: v,
-                check_set_errors=False, check_get_errors=False,
-                **kwargs):
-        """Fake Instrument.control.
-
-        Strip commands and only store and return values indicated by
-        format strings to mimic many simple commands.
-        This is analogous how the tests in test_instrument are handled.
-        """
-
-        # Regex search to find first format specifier in the command
-        fmt_spec_pattern = r'(%[\w.#-+ *]*[diouxXeEfFgGcrsa%])'
-        match = re.findall(fmt_spec_pattern, set_command)
-        if match:
-            # format_specifier = match.group(0)
-            format_specifier = ','.join(match)
+        if self.SCPI:
+            errors = []
+            while True:
+                err = self.values("SYST:ERR?")
+                if int(err[0]) != 0:
+                    log.error(f"{self.name}: {err[0]}, {err[1]}")
+                    errors.append(err)
+                else:
+                    break
+            return errors
         else:
-            format_specifier = ''
-        # To preserve as much functionality as possible, call the real
-        # control method with modified get_command and set_command.
-        return Instrument.control(get_command="",
-                                  set_command=format_specifier,
-                                  docs=docs,
-                                  validator=validator,
-                                  values=values,
-                                  map_values=map_values,
-                                  get_process=get_process,
-                                  set_process=set_process,
-                                  check_set_errors=check_set_errors,
-                                  check_get_errors=check_get_errors,
-                                  **kwargs)
+            raise NotImplementedError("Non SCPI instruments require implementation in subclasses")
+
+    def check_get_errors(self):
+        """Check for errors after having gotten a property and log them.
+
+        Called if :code:`check_get_errors=True` is set for that property.
+
+        If you override this method, you may choose to raise an Exception for certain errors.
+
+        :return: List of error entries.
+        """
+        return self.check_errors()
+
+    def check_set_errors(self):
+        """Check for errors after having set a property and log them.
+
+        Called if :code:`check_set_errors=True` is set for that property.
+
+        If you override this method, you may choose to raise an Exception for certain errors.
+
+        :return: List of error entries.
+        """
+        return self.check_errors()

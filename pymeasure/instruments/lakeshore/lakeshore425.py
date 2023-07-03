@@ -1,7 +1,7 @@
 #
 # This file is part of the PyMeasure package.
 #
-# Copyright (c) 2013-2021 PyMeasure Developers
+# Copyright (c) 2013-2023 PyMeasure Developers
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -24,7 +24,6 @@
 
 from pymeasure.instruments import Instrument
 from pymeasure.instruments.validators import strict_discrete_set, truncated_discrete_set
-from .adapters import LakeShoreUSBAdapter
 
 from time import sleep
 import numpy as np
@@ -61,7 +60,7 @@ class LakeShore425(Instrument):
         """ A string property that controls the units of the instrument,
         which can take the values of G, T, Oe, or A/m. """,
         validator=strict_discrete_set,
-        values={'G':1, 'T':2, 'Oe':3, 'A/m':4},
+        values={'G': 1, 'T': 2, 'Oe': 3, 'A/m': 4},
         map_values=True
     )
     range = Instrument.control(
@@ -70,16 +69,24 @@ class LakeShore425(Instrument):
         units of Gauss, which can take the values 35, 350, 3500, and
         35,000 G. """,
         validator=truncated_discrete_set,
-        values={35:1, 350:2, 3500:3, 35000:4},
+        values={35: 1, 350: 2, 3500: 3, 35000: 4},
         map_values=True
     )
 
-    def __init__(self, port):
-        super(LakeShore425, self).__init__(
-            LakeShoreUSBAdapter(port),
-            "LakeShore 425 Gaussmeter",
+    def __init__(self, adapter, name="LakeShore 425 Gaussmeter", **kwargs):
+        super().__init__(
+            adapter,
+            name,
+            asrl={'write_termination': "\n",
+                  'read_termination': "\n",  # from manual
+                  'baud_rate': 57600,
+                  'timeout': 500,
+                  'parity': 1,  # odd
+                  'data_bits': 7
+                  },
+            **kwargs
         )
-        
+
     def auto_range(self):
         """ Sets the field range to automatically adjust """
         self.write("AUTO")

@@ -1,7 +1,7 @@
 #
 # This file is part of the PyMeasure package.
 #
-# Copyright (c) 2013-2021 PyMeasure Developers
+# Copyright (c) 2013-2023 PyMeasure Developers
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -23,7 +23,6 @@
 #
 
 from pymeasure.instruments import Instrument
-from pymeasure.adapters import SerialAdapter
 from time import sleep
 import re
 
@@ -36,23 +35,23 @@ class ParkerGV6(Instrument):
 
     degrees_per_count = 0.00045  # 90 deg per 200,000 count
 
-    def __init__(self, port):
-        super(ParkerGV6, self).__init__(
-            SerialAdapter(port, 9600, timeout=0.5),
-            "Parker GV6 Motor Controller"
+    def __init__(self, adapter, name="Parker GV6 Motor Controller", **kwargs):
+        super().__init__(
+            adapter,
+            name,
+            asrl={'baud_rate': 9600,
+                  'timeout': 500,
+                  },
+            write_termination="\r",
+            **kwargs
         )
-        self.setDefaults()
-
-    def write(self, command):
-        """ Overwrites the Insturment.write command to provide the correct
-        line break syntax
-        """
-        self.connection.write(command + "\r")
+        self.set_defaults()
 
     def read(self):
         """ Overwrites the Instrument.read command to provide the correct
         functionality
         """
+        # TODO seems to be broken as it does not make sense see issue #623
         return re.sub(r'\r\n\n(>|\?)? ', '', "\n".join(self.readlines()))
 
     def set_defaults(self):
@@ -100,7 +99,7 @@ class ParkerGV6(Instrument):
         """
         position = self.position
         if position is not None:
-            return position*self.degrees_per_count
+            return position * self.degrees_per_count
         else:
             return None
 
@@ -109,7 +108,7 @@ class ParkerGV6(Instrument):
         """ Gives the motor a setpoint in degrees based on an
         angle from a relative or absolution position
         """
-        self.position = int(angle*self.degrees_per_count**-1)
+        self.position = int(angle * self.degrees_per_count**-1)
 
     @property
     def angle_error(self):
@@ -118,7 +117,7 @@ class ParkerGV6(Instrument):
         """
         position_error = self.position_error
         if position_error is not None:
-            return position_error*self.degrees_per_count
+            return position_error * self.degrees_per_count
         else:
             return None
 
@@ -198,6 +197,11 @@ class ParkerGV6(Instrument):
         self.write("LSPOS%d" % int(positive))
         self.write("LSNEG%d" % int(negative))
 
+    @property
+    def echo(self):
+        pass
+
+    @echo.setter
     def echo(self, enable=False):
         """ Enables (True) or disables (False) the echoing
         of all commands that are sent to the instrument

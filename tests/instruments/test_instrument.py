@@ -1,7 +1,7 @@
 #
 # This file is part of the PyMeasure package.
 #
-# Copyright (c) 2013-2021 PyMeasure Developers
+# Copyright (c) 2013-2023 PyMeasure Developers
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -22,10 +22,78 @@
 # THE SOFTWARE.
 #
 
+
+import time
+from unittest import mock
+
 import pytest
-from pymeasure.adapters import FakeAdapter
-from pymeasure.instruments.instrument import Instrument, FakeInstrument
-from pymeasure.instruments.validators import strict_discrete_set, strict_range
+
+from pymeasure.test import expected_protocol
+from pymeasure.instruments import Instrument, Channel
+from pymeasure.adapters import FakeAdapter, ProtocolAdapter
+from pymeasure.instruments.fakes import FakeInstrument
+from pymeasure.instruments.validators import truncated_range
+
+
+class GenericInstrument(FakeInstrument):
+    #  Use truncated_range as this easily lets us test for the range boundaries
+    fake_ctrl = Instrument.control(
+        "", "%d", "docs",
+        validator=truncated_range,
+        values=(1, 10),
+        dynamic=True,
+    )
+    fake_setting = Instrument.setting(
+        "%d", "docs",
+        validator=truncated_range,
+        values=(1, 10),
+        dynamic=True,
+    )
+    fake_measurement = Instrument.measurement(
+        "", "docs",
+        values={'X': 1, 'Y': 2, 'Z': 3},
+        map_values=True,
+        dynamic=True,
+    )
+
+
+@pytest.fixture()
+def generic():
+    return GenericInstrument()
+
+
+class GenericChannel(Channel):
+    #  Use truncated_range as this easily lets us test for the range boundaries
+    fake_ctrl = Instrument.control(
+        "C{ch}:control?", "C{ch}:control %d", "docs",
+        validator=truncated_range,
+        values=(1, 10),
+        dynamic=True,
+    )
+    fake_setting = Instrument.setting(
+        "C{ch}:setting %d", "docs",
+        validator=truncated_range,
+        values=(1, 10),
+        dynamic=True,
+    )
+    fake_measurement = Instrument.measurement(
+        "C{ch}:measurement?", "docs",
+        values={'X': 1, 'Y': 2, 'Z': 3},
+        map_values=True,
+        dynamic=True,
+    )
+    special_control = Instrument.control(
+        "SOUR{ch}:special?", "OUTP{ch}:special %s",
+        """A special control with different channel specifiers for get and set.""",
+        cast=str,
+    )
+
+
+class ChannelInstrument(Instrument):
+    def __init__(self, adapter, name="ChannelInstrument", **kwargs):
+        super().__init__(adapter, name, **kwargs)
+        self.add_child(GenericChannel, "A")
+        self.add_child(GenericChannel, "B")
 
 
 def test_fake_instrument():
@@ -36,217 +104,175 @@ def test_fake_instrument():
     assert fake.values("5") == [5]
 
 
-def test_control_doc():
-    doc = """ X property """
-
-    class Fake(Instrument):
-        x = Instrument.control(
-            "", "%d", doc
-        )
-
-    assert Fake.x.__doc__ == doc
+@pytest.mark.parametrize("adapter", (("COM1", 87, "USB")))
+def test_init_visa(adapter):
+    Instrument(adapter, "def", visa_library="@sim")
+    pass  # Test that no error is raised
 
 
-def test_control_validator():
-    class Fake(FakeInstrument):
-        x = Instrument.control(
-            "", "%d", "",
-            validator=strict_discrete_set,
-            values=range(10),
-        )
-
-    fake = Fake()
-    fake.x = 5
-    assert fake.read() == '5'
-    fake.x = 5
-    assert fake.x == 5
-    with pytest.raises(ValueError) as e_info:
-        fake.x = 20
+@pytest.mark.xfail()  # I do not know, when this error is raised
+def test_init_visa_fail():
+    with pytest.raises(Exception, match="Invalid adapter"):
+        Instrument("abc", "def", visa_library="@xyz")
 
 
-def test_control_validator_map():
-    class Fake(FakeInstrument):
-        x = Instrument.control(
-            "", "%d", "",
-            validator=strict_discrete_set,
-            values=[4, 5, 6, 7],
-            map_values=True,
-        )
-
-    fake = Fake()
-    fake.x = 5
-    assert fake.read() == '1'
-    fake.x = 5
-    assert fake.x == 5
-    with pytest.raises(ValueError) as e_info:
-        fake.x = 20
+def test_global_preprocess_reply():
+    with pytest.warns(FutureWarning, match="deprecated"):
+        inst = Instrument(FakeAdapter(), "name", preprocess_reply=lambda v: v.strip("x"))
+        assert inst.values("x5x") == [5]
 
 
-def test_control_dict_map():
-    class Fake(FakeInstrument):
-        x = Instrument.control(
-            "", "%d", "",
-            validator=strict_discrete_set,
-            values={5: 1, 10: 2, 20: 3},
-            map_values=True,
-        )
-
-    fake = Fake()
-    fake.x = 5
-    assert fake.read() == '1'
-    fake.x = 5
-    assert fake.x == 5
-    fake.x = 20
-    assert fake.read() == '3'
+def test_instrument_in_context():
+    with Instrument("abc", "def", visa_library="@sim") as instr:
+        pass
+    assert instr.isShutdown is True
 
 
-def test_control_dict_str_map():
-    class Fake(FakeInstrument):
-        x = Instrument.control(
-            "", "%d", "",
-            validator=strict_discrete_set,
-            values={'X': 1, 'Y': 2, 'Z': 3},
-            map_values=True,
-        )
+def test_with_statement():
+    """ Test the with-statement-behaviour of the instruments. """
+    with FakeInstrument() as fake:
+        # Check if fake is an instance of FakeInstrument
+        assert isinstance(fake, FakeInstrument)
 
-    fake = Fake()
-    fake.x = 'X'
-    assert fake.read() == '1'
-    fake.x = 'Y'
-    assert fake.x == 'Y'
-    fake.x = 'Z'
-    assert fake.read() == '3'
+        # Check whether the shutdown function is already called
+        assert fake.isShutdown is False
+
+    # Check whether the shutdown function is called upon
+    assert fake.isShutdown is True
 
 
-def test_control_process():
-    class Fake(FakeInstrument):
-        x = Instrument.control(
-            "", "%d", "",
-            validator=strict_range,
-            values=[5e-3, 120e-3],
-            get_process=lambda v: v * 1e-3,
-            set_process=lambda v: v * 1e3,
-        )
+class TestInstrumentCommunication:
+    @pytest.fixture()
+    def instr(self):
+        a = mock.MagicMock(return_value="5")
+        return Instrument(a, "abc")
 
-    fake = Fake()
-    fake.x = 10e-3
-    assert fake.read() == '10'
-    fake.x = 30e-3
-    assert fake.x == 30e-3
+    def test_write(self, instr):
+        instr.write("abc")
+        assert instr.adapter.method_calls == [mock.call.write('abc')]
 
+    def test_read(self, instr):
+        instr.read()
+        assert instr.adapter.method_calls == [mock.call.read()]
 
-def test_control_get_process():
-    class Fake(FakeInstrument):
-        x = Instrument.control(
-            "", "JUNK%d", "",
-            validator=strict_range,
-            values=[0, 10],
-            get_process=lambda v: int(v.replace('JUNK', '')),
-        )
+    def test_write_bytes(self, instr):
+        instr.write_bytes(b"abc")
+        assert instr.adapter.method_calls == [mock.call.write_bytes(b"abc")]
 
-    fake = Fake()
-    fake.x = 5
-    assert fake.read() == 'JUNK5'
-    fake.x = 5
-    assert fake.x == 5
+    def test_read_bytes(self, instr):
+        instr.read_bytes(5)
+        assert instr.adapter.method_calls == [mock.call.read_bytes(5)]
+
+    def test_write_binary_values(self, instr):
+        instr.write_binary_values("abc", [5, 6, 7])
+        assert instr.adapter.method_calls == [mock.call.write_binary_values("abc", [5, 6, 7])]
 
 
-def test_control_preprocess_reply_property():
-    # test setting preprocess_reply at property-level
-    class Fake(FakeInstrument):
-        x = Instrument.control(
-            "", "JUNK%d",
-            "",
-            preprocess_reply=lambda v: v.replace('JUNK', ''),
-            cast=int
-        )
+class TestWaiting:
+    @pytest.fixture()
+    def instr(self):
+        class Faked(Instrument):
+            def wait_for(self, query_delay=0):
+                self.waited = query_delay
+        return Faked(ProtocolAdapter(), name="faked")
 
-    fake = Fake()
-    fake.x = 5
-    assert fake.read() == 'JUNK5'
-    # notice that read returns the full reply since preprocess_reply is only
-    # called inside Adapter.values()
-    fake.x = 5
-    assert fake.x == 5
-    fake.x = 5
-    assert type(fake.x) == int
+    def test_waiting(self):
+        instr = Instrument(ProtocolAdapter(), "faked")
+        stop = time.perf_counter() + 100
+        instr.wait_for(0.1)
+        assert time.perf_counter() < stop
 
+    def test_ask_calls_wait(self, instr):
+        instr.adapter.comm_pairs = [("abc", "resp")]
+        instr.ask("abc")
+        assert instr.waited == 0
 
-def test_control_preprocess_reply_adapter():
-    # test setting preprocess_reply at Adapter-level
-    class Fake(FakeInstrument):
-        def __init__(self):
-            super().__init__(preprocess_reply=lambda v: v.replace('JUNK', ''))
+    def test_ask_calls_wait_with_delay(self, instr):
+        instr.adapter.comm_pairs = [("abc", "resp")]
+        instr.ask("abc", query_delay=10)
+        assert instr.waited == 10
 
-        x = Instrument.control(
-            "", "JUNK%d", "",
-            cast=int
-        )
-
-    fake = Fake()
-    fake.x = 5
-    assert fake.read() == 'JUNK5'
-    # notice that read returns the full reply since preprocess_reply is only
-    # called inside Adapter.values()
-    fake.x = 5
-    assert fake.x == 5
+    def test_binary_values_calls_wait(self, instr):
+        instr.adapter.comm_pairs = [("abc", "abcdefgh")]
+        instr.binary_values("abc")
+        assert instr.waited == 0
 
 
-def test_measurement_dict_str_map():
-    class Fake(FakeInstrument):
-        x = Instrument.measurement(
-            "", "",
-            values={'X': 1, 'Y': 2, 'Z': 3},
-            map_values=True,
-        )
-
-    fake = Fake()
-    fake.write('1')
-    assert fake.x == 'X'
-    fake.write('2')
-    assert fake.x == 'Y'
-    fake.write('3')
-    assert fake.x == 'Z'
+@pytest.mark.parametrize("method, write, reply", (("id", "*IDN?", "xyz"),
+                                                  ("complete", "*OPC?", "1"),
+                                                  ("status", "*STB?", "189"),
+                                                  ("options", "*OPT?", "a9"),
+                                                  ))
+def test_SCPI_properties(method, write, reply):
+    with expected_protocol(
+            Instrument,
+            [(write, reply)],
+            name="test") as instr:
+        assert getattr(instr, method) == reply
 
 
-def test_setting_process():
-    class Fake(FakeInstrument):
-        x = Instrument.setting(
-            "OUT %d", "",
-            set_process=lambda v: int(bool(v)),
-        )
-
-    fake = Fake()
-    fake.x = False
-    assert fake.read() == 'OUT 0'
-    fake.x = 2
-    assert fake.read() == 'OUT 1'
+@pytest.mark.parametrize("method, write", (("clear", "*CLS"),
+                                           ("reset", "*RST")
+                                           ))
+def test_SCPI_write_commands(method, write):
+    with expected_protocol(
+            Instrument,
+            [(write, None)],
+            name="test") as instr:
+        getattr(instr, method)()
 
 
-def test_control_multivalue():
-    class Fake(FakeInstrument):
-        x = Instrument.control(
-            "", "%d,%d", "",
-        )
-
-    fake = Fake()
-    fake.x = (5, 6)
-    assert fake.read() == '5,6'
+def test_instrument_check_errors():
+    with expected_protocol(
+            Instrument,
+            [("SYST:ERR?", "17,funny stuff"),
+             ("SYST:ERR?", "0")],
+            name="test") as instr:
+        assert instr.check_errors() == [[17, "funny stuff"]]
 
 
-@pytest.mark.parametrize(
-    'set_command, given, expected',
-    [("%d", 5, 5),
-     ("%d, %d", (5, 6), [5, 6]),  # input has to be a tuple, not a list
-     ])
-def test_fakeinstrument_control(set_command, given, expected):
-    """FakeInstrument's custom simple control needs to process values correctly.
-    """
-    class Fake(FakeInstrument):
-        x = FakeInstrument.control(
-            "", set_command, "",
-        )
+@pytest.mark.parametrize("method", ("id", "complete", "status", "options",
+                                    "clear", "reset", "check_errors"
+                                    ))
+def test_SCPI_false_raises_errors(method):
+    with pytest.raises(NotImplementedError):
+        getattr(Instrument(FakeAdapter(), "abc", includeSCPI=False), method)()
 
-    fake = Fake()
-    fake.x = given
-    assert fake.x == expected
+
+# Channel
+class TestMultiFunctionality:
+    """Test the usage of children for different functionalities."""
+    class SomeFunctionality(Channel):
+        """This Functionality needs a prepended `id`."""
+
+        def insert_id(self, command, **kwargs):
+            return f"{self.id}:{command}"
+
+        voltage = Channel.control("Volt?", "Volt %f", "Set voltage in Volts.")
+
+    class InstrumentWithFunctionality(ChannelInstrument):
+        """Instrument with some functionality."""
+
+        def __init__(self, adapter, **kwargs):
+            super().__init__(adapter, **kwargs)
+            self.add_child(TestMultiFunctionality.SomeFunctionality, "X",
+                           collection="functions", prefix="f_")
+
+    def test_functionality_dict(self):
+        inst = TestMultiFunctionality.InstrumentWithFunctionality(ProtocolAdapter())
+        assert isinstance(inst.functions["X"], TestMultiFunctionality.SomeFunctionality)
+        assert inst.functions["X"] == inst.f_X
+
+    def test_functions_voltage_getter(self):
+        with expected_protocol(
+                TestMultiFunctionality.InstrumentWithFunctionality,
+                [("X:Volt?", "123.456")]
+        ) as inst:
+            assert inst.f_X.voltage == 123.456
+
+    def test_functions_voltage_setter(self):
+        with expected_protocol(
+                TestMultiFunctionality.InstrumentWithFunctionality,
+                [("X:Volt 123.456000", None)]
+        ) as inst:
+            inst.f_X.voltage = 123.456
