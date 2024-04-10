@@ -23,7 +23,7 @@
 #
 
 import logging
-from pymeasure.instruments import Instrument, Channel
+from pymeasure.instruments import Instrument, Channel, SCPIUnknownMixin
 from pymeasure.instruments.validators import strict_discrete_set, strict_range
 
 log = logging.getLogger(__name__)
@@ -97,13 +97,17 @@ class PSChannel(Channel):
         return f"INST:SEL CH{self.id};{command}"
 
 
-class Keithley2200(Instrument):
+class Keithley2200(SCPIUnknownMixin, Instrument):
     """Represents the Keithley 2200 Power Supply."""
 
     def __init__(self, adapter, name="Keithley2200", **kwargs):
         super().__init__(adapter, name, **kwargs)
 
-    channels = Instrument.ChannelCreator(PSChannel, ("1", "2", "3"))
+    ch_1 = Instrument.ChannelCreator(PSChannel, 1)
+
+    ch_2 = Instrument.ChannelCreator(PSChannel, 2)
+
+    ch_3 = Instrument.ChannelCreator(PSChannel, 3)
 
     display_enabled = Instrument.control(
         "DISP?",

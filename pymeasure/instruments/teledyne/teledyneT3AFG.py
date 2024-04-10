@@ -1,7 +1,7 @@
 #
 # This file is part of the PyMeasure package.
 #
-# Copyright (c) 2013-2023 PyMeasure Developers
+# Copyright (c) 2013-2024 PyMeasure Developers
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -24,7 +24,7 @@
 
 import logging
 
-from pymeasure.instruments import Instrument, Channel
+from pymeasure.instruments import Instrument, Channel, SCPIMixin
 from pymeasure.instruments.validators import strict_range, strict_discrete_set
 
 log = logging.getLogger(__name__)
@@ -33,21 +33,22 @@ log.addHandler(logging.NullHandler())
 
 def get_process_generator_search(keyword, unit, type):
     """Generate a get_process method searching for keyword, stripping unit"""
+
     def selector(values):
         if keyword in values:
             try:
-                return type(values[values.index(keyword)+1].strip(unit))
+                return type(values[values.index(keyword) + 1].strip(unit))
             except (ValueError, IndexError):
                 # Something went quite wrong if the keyword exists but the value doesn't
                 return None
         else:
             # Wrong wavetype for this keyword
             return None
+
     return selector
 
 
 class SignalChannel(Channel):
-
     output_enabled = Channel.control(
         "C{ch}:OUTPut?",
         "C{ch}:OUTPut %s",
@@ -121,34 +122,39 @@ class SignalChannel(Channel):
     )
 
 
-class TeledyneT3AFG(Instrument):
+class TeledyneT3AFG(SCPIMixin, Instrument):
     """Represents the Teledyne T3AFG series of arbitrary waveform
     generator interface for interacting with the instrument.
 
-    Intially targeting T3AFG80, some features may not be available on
+    Initially targeting T3AFG80, some features may not be available on
     lower end models and features from higher end models are not
-    included here intially.
+    included here yet.
 
     Future improvements (help welcomed):
+
     - Add other OUTPut related controls like Load and Polarity
     - Add other Basic Waveform related controls like Period
     - Add frequency ranges per model
     - Add channel coupling control
 
     .. code-block: python
-    # Example assumes Ethernet (TCPIP) interface
-    generator=TeledyneT3AFG('TCPIP0::xxx.xxx.xxx.xxx::pppp::SOCKET')
-    generator.reset()
-    generator.ch_1.wavetype='SINE'
-    generator.ch_1.amplitude=2
-    generator.ch_1.output_enabled=True
+
+        # Example assumes Ethernet (TCPIP) interface
+        generator=TeledyneT3AFG('TCPIP0::xxx.xxx.xxx.xxx::pppp::SOCKET')
+        generator.reset()
+        generator.ch_1.wavetype='SINE'
+        generator.ch_1.amplitude=2
+        generator.ch_1.output_enabled=True
     """
 
-    channels = Instrument.ChannelCreator(SignalChannel, (1, 2))
+    ch_1 = Instrument.ChannelCreator(SignalChannel, 1)
+
+    ch_2 = Instrument.ChannelCreator(SignalChannel, 2)
 
     def __init__(self, adapter, name="Teledyne T3AFG", **kwargs):
         super().__init__(
-            adapter, name, includeSCPI=True,
+            adapter,
+            name,
             tcpip={'read_termination': '\n'},
             **kwargs
         )
