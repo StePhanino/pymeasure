@@ -22,4 +22,4 @@
 # THE SOFTWARE.
 #
 
-from .apsin12G import APSIN12G
+from .apsinXXG import APSINXXG

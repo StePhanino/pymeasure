@@ -25,31 +25,48 @@
 from pymeasure.instruments import Instrument, SCPIUnknownMixin
 from pymeasure.instruments.validators import strict_range, strict_discrete_set
 
-
-class APSIN12G(SCPIUnknownMixin, Instrument):
+class APSINXXG(SCPIUnknownMixin, Instrument):
     """ Represents the Anapico APSIN12G Signal Generator with option 9K,
-    HP and GPIB. """
-    FREQ_LIMIT = [9e3, 12e9]
-    POW_LIMIT = [-30, 27]
+    HP and GPIB. Default frequency and power Limits are [100e3, 12e9] Hz 
+	and [-20, 15] dBm corresponding to an APSIN12G without options.
+	If you want to change them, please use:
 
-    def __init__(self, adapter, name="Anapico APSIN12G Signal Generator", **kwargs):
+	.. code-block:: python
+
+		synt = APSINXXG(adapter)
+		synt.frequeny_values = (new_low_freq, new_high_freq)
+		synt.power_values = (new_low_pow, new_high_pow)
+	
+	Please see `dynamic` attribute of `CommonBase.control` here_ for more 
+	information.
+	
+	.. _here: https://pymeasure.readthedocs.io/en/latest/api/instruments/instruments.html#pymeasure.instruments.common_base.CommonBase
+	
+	"""
+    FREQ_LIMIT = [100e3, 12e9]
+    POW_LIMIT = [-20, 15]
+
+    def __init__(self, adapter, name="Anapico APSINXXG Signal Generators", **kwargs):
         super().__init__(
             adapter,
             name,
             **kwargs
         )
+        
 
     power = Instrument.control(
         "SOUR:POW:LEV:IMM:AMPL?;", "SOUR:POW:LEV:IMM:AMPL %gdBm;",
         """Control the output power in dBm. (float)""",
         validator=strict_range,
-        values=POW_LIMIT
+        values=POW_LIMIT,
+        dynamic=True
     )
     frequency = Instrument.control(
         "SOUR:FREQ:CW?;", "SOUR:FREQ:CW %eHz;",
         """Control the output frequency in Hz. (float)""",
         validator=strict_range,
-        values=FREQ_LIMIT
+        values=FREQ_LIMIT,
+        dynamic=True
     )
     blanking = Instrument.control(
         ":OUTP:BLAN:STAT?", ":OUTP:BLAN:STAT %s",
